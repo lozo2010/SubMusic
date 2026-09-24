@@ -33,6 +33,11 @@ class Api {
         return d_url + d_url_add;
     }
 
+    // server url without the api specific addition
+    function baseUrl() {
+        return d_url;
+    }
+
     function usr() {
         return d_usr;
     }

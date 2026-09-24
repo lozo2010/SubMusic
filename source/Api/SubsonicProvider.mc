@@ -1,3 +1,6 @@
+using Toybox.Communications;
+using Toybox.Lang;
+using Toybox.System;
 using SubMusic.Utils;
 
 class SubsonicProvider {
@@ -10,6 +13,19 @@ class SubsonicProvider {
     private var d_progress;  // intermediate callback to update request progress
 	
 	private var d_range;		// stores range for ranged requests
+
+	// Navidrome native api, used to fetch playlist songs in pages
+	// (Subsonic getPlaylist cannot be paged and fails with -402 on larger playlists)
+	enum { ND_MAX_LIMIT = 20, }
+	private var d_ndSupported = null;	// null = unknown, true/false after first try
+	private var d_ndActive = false;		// true while a native request is running
+	private var d_ndRetried = false;	// true if token was already refreshed
+	private var d_ndId;
+	private var d_ndStart;
+	private var d_ndLimit;
+	private var d_ndSongs;
+
+	private var d_id;			// playlist id for getPlaylist
 
 	function initialize(settings) {
 		d_api = new SubsonicAPI(
@@ -25,6 +41,7 @@ class SubsonicProvider {
 		}
 		
 		d_api.update(settings);
+		d_ndSupported = null;		// server may have changed
 	}
 	
 	// functions:
@@ -80,26 +97,154 @@ class SubsonicProvider {
 	 */
 	function getPlaylist(id, callback) {
 		d_callback = callback;
+		d_id = id;
 
-		var params = {
-			"id" => id,
-		};
-		d_api.getPlaylist(self.method(:onGetPlaylist), params);
+		// getPlaylists does not include the songs, so the response stays small
+		d_api.getPlaylists(self.method(:onGetPlaylist));
 	}
-	
+
 	/**
 	 * getPlaylistSongs
-	 * 
+	 *
 	 * returns an array of songs on the playlist with id
 	 */
 	function getPlaylistSongs(id, callback) {
 		d_callback = callback;
 
+		if (d_ndSupported != false) {
+			d_ndId = id;
+			d_ndStart = 0;
+			d_ndLimit = ND_MAX_LIMIT;
+			d_ndSongs = [];
+			d_ndRetried = false;
+			d_ndActive = true;
+			ndNext();
+			return;
+		}
+
+		getPlaylistSongsSubsonic(id);
+	}
+
+	function getPlaylistSongsSubsonic(id) {
 		var params = {
 			"id" => id,
 		};
 
 		d_api.getPlaylist(self.method(:onGetPlaylistSongs), params);
+	}
+
+	// request the next page of songs, login first if needed
+	function ndNext() {
+		if (d_api.ndToken() == null) {
+			d_api.ndLogin(self.method(:onNdLogin));
+			return;
+		}
+		d_api.ndPlaylistTracks(self.method(:onNdPlaylistTracks), d_ndId, d_ndStart, d_ndStart + d_ndLimit);
+	}
+
+	function onNdLogin(token) {
+		d_ndSupported = true;
+		ndNext();
+	}
+
+	function onNdPlaylistTracks(response) {
+		if ($.debug) {
+			System.println("SubsonicProvider::onNdPlaylistTracks( received: " + response.size() + ", total: " + d_ndSongs.size() + ")");
+		}
+
+		for (var idx = 0; idx < response.size(); ++idx) {
+			var track = response[idx];
+
+			var time = track["duration"];
+			if (time == null) {
+				time = 0;
+			}
+			// album art is shared by all songs of an album, less downloads
+			var art_id = track["mediaFileId"];
+			if (track["albumId"] != null) {
+				art_id = "al-" + track["albumId"];
+			}
+			d_ndSongs.add(new Song({
+				"id" => track["mediaFileId"],
+				"title" => track["title"],
+				"artist" => track["artist"],
+				"time" => time.toNumber(),
+				"mime" => suffixToMime(track["suffix"]),
+				"art_id" => art_id,
+			}));
+		}
+
+		// full page received, more songs may be available
+		if (response.size() >= d_ndLimit) {
+			d_ndStart += response.size();
+			ndNext();
+			return;
+		}
+
+		d_ndActive = false;
+		var songs = d_ndSongs;
+		d_ndSongs = null;
+		d_callback.invoke(songs);
+	}
+
+	// handle errors of the native api, returns true if handled
+	function onNdError(error) {
+		// response too large, retry with smaller pages
+		if ((error instanceof SubMusic.GarminSdkError)
+			&& (error.respCode() == Communications.NETWORK_RESPONSE_TOO_LARGE)
+			&& (d_ndLimit > 1)) {
+			d_ndLimit = (d_ndLimit / 2).toNumber();
+			if ($.debug) {
+				System.println("SubsonicProvider native limit was lowered to " + d_ndLimit);
+			}
+			ndNext();
+			return true;
+		}
+
+		// token expired, login once more
+		if ((d_ndSupported == true)
+			&& !d_ndRetried
+			&& (error instanceof SubMusic.HttpError)
+			&& (error.http_type() == SubMusic.HttpError.UNAUTHORIZED)) {
+			d_ndRetried = true;
+			d_api.ndClearToken();
+			ndNext();
+			return true;
+		}
+
+		d_ndActive = false;
+		d_ndSongs = null;
+
+		// native api not available (not Navidrome), fall back to Subsonic
+		if (d_ndSupported != true) {
+			if ($.debug) {
+				System.println("SubsonicProvider native api not available: " + error.toString());
+			}
+			d_ndSupported = false;
+			getPlaylistSongsSubsonic(d_ndId);
+			return true;
+		}
+		return false;
+	}
+
+	static function suffixToMime(suffix) {
+		if (!(suffix instanceof Lang.String)) {
+			return null;
+		}
+		suffix = suffix.toLower();
+		if (suffix.equals("mp3")) {
+			return "audio/mpeg";
+		}
+		if (suffix.equals("m4a") || suffix.equals("mp4")) {
+			return "audio/mp4";
+		}
+		if (suffix.equals("aac")) {
+			return "audio/aac";
+		}
+		if (suffix.equals("wav")) {
+			return "audio/wav";
+		}
+		return null;	// unsupported, will be transcoded to mp3
 	}
 
 	/**
@@ -324,17 +469,31 @@ class SubsonicProvider {
 			System.println("SubsonicProvider::onGetPlaylist( response = " + response + ")");
 		}
 		
-		var songCount = response["songCount"];
-		if (songCount == null) {
-			songCount = 0;		// assume 0 if not defined
+		// response is the array of all playlists, find the requested one
+		if (!(response instanceof Lang.Array)) {
+			d_callback.invoke([]);
+			return;
 		}
+		for (var idx = 0; idx < response.size(); ++idx) {
+			var playlist = response[idx];
+			if (!d_id.toString().equals(playlist["id"].toString())) {
+				continue;
+			}
 
-		d_callback.invoke([new Playlist({
-				"id" => response["id"],
-				"name" => response["name"],
-				"songCount" => songCount.toNumber(),
-				"remote" => true,
-		})]);
+			var songCount = playlist["songCount"];
+			if (songCount == null) {
+				songCount = 0;		// assume 0 if not defined
+			}
+
+			d_callback.invoke([new Playlist({
+					"id" => playlist["id"],
+					"name" => playlist["name"],
+					"songCount" => songCount.toNumber(),
+					"remote" => true,
+			})]);
+			return;
+		}
+		d_callback.invoke([]);		// not found on server
 	}
 
 	function onGetPlaylistSongs(response) {
@@ -384,6 +543,9 @@ class SubsonicProvider {
 	}
 	
 	function onError(error) {
+		if (d_ndActive && onNdError(error)) {
+			return;
+		}
 		d_fallback.invoke(error);
 	}
 

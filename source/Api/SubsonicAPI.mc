@@ -11,7 +11,8 @@ class SubsonicAPI extends Api {
 
 	private var d_params = {};
 	private var d_options = {};
-	
+	private var d_ndToken = null;		// JWT token for the Navidrome native api
+
 	function initialize(settings, progress, fallback) {
 		Api.initialize("/rest/");
 		update(settings);			// call overridden updater from here
@@ -271,6 +272,113 @@ class SubsonicAPI extends Api {
     	d_callback.invoke(data);
     }
 
+	/**
+	 * ndLogin
+	 *
+	 * logs in to the Navidrome native api, stores the JWT token
+	 * callback receives the token (string)
+	 */
+	function ndLogin(callback) {
+		if ($.debug) {
+			System.println("SubsonicAPI::ndLogin");
+		}
+
+		Api.setCallback(callback);
+
+		var url = baseUrl() + "/auth/login";
+		var body = {
+			"username" => usr(),
+			"password" => key(),
+		};
+		var options = {
+			:method => Communications.HTTP_REQUEST_METHOD_POST,
+			:headers => ndHeaders({
+				"Content-Type" => Communications.REQUEST_CONTENT_TYPE_JSON,
+			}),
+			:responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON,
+		};
+		Communications.makeWebRequest(url, body, options, self.method(:onNdLogin));
+	}
+
+	function onNdLogin(responseCode, data) {
+		if ($.debug) {
+			System.println("SubsonicAPI::onNdLogin( responseCode: " + responseCode + ")");
+		}
+
+		var error = Api.checkDictionaryResponse(responseCode, data);
+		if (error) {
+			d_fallback.invoke(error);
+			return;
+		}
+		d_ndToken = data["token"];
+		if (!(d_ndToken instanceof Lang.String)) {
+			d_ndToken = null;
+			d_fallback.invoke(new SubMusic.ApiError(SubMusic.ApiError.BADRESPONSE));
+			return;
+		}
+		d_callback.invoke(d_ndToken);
+	}
+
+	function ndToken() {
+		return d_ndToken;
+	}
+
+	function ndClearToken() {
+		d_ndToken = null;
+	}
+
+	/**
+	 * ndPlaylistTracks
+	 *
+	 * returns the tracks [start, end) of a playlist through the Navidrome native api
+	 * requires a valid token from ndLogin
+	 */
+	function ndPlaylistTracks(callback, id, start, end) {
+		if ($.debug) {
+			System.println("SubsonicAPI::ndPlaylistTracks( id: " + id + ", start: " + start + ", end: " + end + ")");
+		}
+
+		Api.setCallback(callback);
+
+		var url = baseUrl() + "/api/playlist/" + id + "/tracks";
+		var params = {
+			"_start" => start,
+			"_end" => end,
+			"_sort" => "id",
+			"_order" => "ASC",
+		};
+		var options = {
+			:method => Communications.HTTP_REQUEST_METHOD_GET,
+			:headers => ndHeaders({
+				"X-ND-Authorization" => "Bearer " + d_ndToken,
+			}),
+			:responseType => Communications.HTTP_RESPONSE_CONTENT_TYPE_JSON,
+		};
+		Communications.makeWebRequest(url, params, options, self.method(:onNdPlaylistTracks));
+	}
+
+	function onNdPlaylistTracks(responseCode, data) {
+		if ($.debug) {
+			System.println("SubsonicAPI::onNdPlaylistTracks( responseCode: " + responseCode + ")");
+		}
+
+		var error = Api.checkArrayResponse(responseCode, data);
+		if (error) {
+			d_fallback.invoke(error);
+			return;
+		}
+		d_callback.invoke(data);
+	}
+
+	// merge the given headers with the (optional) HTTP Basic auth header
+	hidden function ndHeaders(headers) {
+		var base = d_options[:headers];
+		if (base == null) {
+			return headers;
+		}
+		return Utils.merge(base, headers);
+	}
+
 	// @override
 	function checkApiError(responseCode, data) {
 		return SubsonicError.is(responseCode, data);
@@ -280,6 +388,7 @@ class SubsonicAPI extends Api {
 	function update(settings) {
 		Api.update(settings);					// normal update
 		updateAut(settings.get("api_aut"));		// add auth update
+		d_ndToken = null;						// credentials may have changed
 	}
 
 	// @override
