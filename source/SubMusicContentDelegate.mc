@@ -83,8 +83,12 @@ class SubMusicContentDelegate extends Media.ContentDelegate {
     // Handles a notification from the system that an event has
     // been triggered for the given song
     function onSong(contentRefId, songEvent as Media.SongEvent, playbackPosition) as Void {
+    	// nothing to do without content (e.g. playback started with nothing loaded)
+    	if (contentRefId == null) {
+    		return;
+    	}
     	if ($.debug) {
-    		System.println("onSong Event (" + d_events[songEvent] + "): " + getSongName(contentRefId) + " at position " + playbackPosition);
+    		System.println("onSong Event (" + songEvent + "): " + contentRefId + " at position " + playbackPosition);
     	}
 	
 		var audio = findAudioByRefId(contentRefId);
@@ -138,6 +142,7 @@ class SubMusicContentDelegate extends Media.ContentDelegate {
 		}
 		var ids = [ SongStore.getIds(), EpisodeStore.getIds() ];
 		for (var typ = 0; typ != Audio.END; ++typ) {
+			if (ids[typ] == null) { continue; }
 			for (var idx = 0; idx != ids[typ].size(); ++idx) {
 				audio = new Audio(ids[typ][idx], typ);
 

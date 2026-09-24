@@ -58,8 +58,9 @@ module SubMusic {
         }
 
         function getAudio(idx) {
-            // return null if out of bounds
-            if ((idx >= idcs().size())
+            // return null if nothing loaded or out of bounds
+            if ((idx == null) || (idcs() == null) || (ids() == null) || (types() == null)
+            	|| (idx >= idcs().size())
             	|| (idx >= ids().size())
             	|| (idx >= types().size())) {
                 return null;

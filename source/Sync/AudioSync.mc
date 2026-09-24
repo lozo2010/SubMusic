@@ -8,7 +8,8 @@ class AudioSync extends Deferrable {
 	private var f_progress; 		// callback on progress
 	
 	// store sync size
-	private var d_todo = [];		// array of IAudio objects
+	private var d_todo = [];		// array of [id, type] pairs, the Audio object is only created
+									// for the front item, so large syncs do not run out of memory
 	private var d_todo_total;		// the number of items that had to be synced
 
 	function initialize(progress, done, fail) {
@@ -35,11 +36,9 @@ class AudioSync extends Deferrable {
 		ids = [ SongStore.getIds(), EpisodeStore.getIds() ];
 		for (var typ = 0; typ != Audio.END; ++typ) {
 			for (var idx = 0; idx != ids[typ].size(); ++idx) {
-				var audio = new Audio(ids[typ][idx], typ);
-
 				// only add to todo if not yet stored
-				if (audio.refId() == null) {
-					d_todo.add(audio);
+				if (refIdOf(ids[typ][idx], typ) == null) {
+					d_todo.add([ids[typ][idx], typ]);
 				}
 			}
 		}
@@ -56,7 +55,8 @@ class AudioSync extends Deferrable {
 		f_progress.invoke(progress());
 		
 		// start download
-		d_provider.getRefId(d_todo[0].id(), d_todo[0].mime(), d_todo[0].type(), method(:onDownloaded));
+		d_audio = new Audio(d_todo[0][0], d_todo[0][1]);
+		d_provider.getRefId(d_audio.id(), d_audio.mime(), d_audio.type(), method(:onDownloaded));
 		return Deferrable.defer();
 	}
 
@@ -82,10 +82,10 @@ class AudioSync extends Deferrable {
     // Callback for when a song is downloaded
 	function onDownloaded(refId) {
 		// update refId
-		d_todo[0].setRefId(refId);
+		d_audio.setRefId(refId);
 
 		// continue to next song
-		d_todo.removeAll(d_todo[0]);
+		next();
 	
 		sync();
 	}
@@ -97,20 +97,35 @@ class AudioSync extends Deferrable {
 
     	// indicate failed sync
 //   	d_playlist.setError(error); TODO
-    	d_failed.add(d_todo[0]);
-    	
     	// check if song in progress
-		if (d_todo[0] == null) {
+		if (d_audio == null) {
 			Deferrable.cancel(error);
 			return;
 		}
 		// record the cause of failure
 //	    	d_todo[0].setError(error);				TODO
 		
+		d_failed.add(d_todo[0][0]);
+
 		// remove first element from todo list
-		d_todo.removeAll(d_todo[0]);
+		next();
 
 		sync();
 		return;
     }
+
+	// drop the front of the todos
+	function next() {
+		d_audio = null;
+		d_todo = d_todo.slice(1, null);
+	}
+
+	// refId of stored audio, without creating the full Audio object
+	static function refIdOf(id, typ) {
+		var storage = (typ == Audio.PODCAST_EPISODE) ? EpisodeStore.get(id) : SongStore.get(id);
+		if (storage == null) {
+			return null;
+		}
+		return storage["refId"];
+	}
 }

@@ -132,6 +132,12 @@ class IPlaylist extends Playlist {
 	// storage access
 	private var d_stored = false;		// true if playlist metadata is in storage
 
+	// state of an update in progress (see beginUpdate)
+	private var d_upd_now;		// songs on the playlist before the update
+	private var d_upd_new;		// songs that still need to be downloaded
+	private var d_upd_ord;		// order of the remote playlist
+	private var d_upd_time;		// total time of the new playlist
+
 	function initialize(id) {
 		if ($.debug) {
 			System.println("IPlaylist::initialize( id : " + id + " )");
@@ -338,27 +344,33 @@ class IPlaylist extends Playlist {
 	
 	// updates song list, returns array of song ids that are not yet locally available
 	function update(songs) {
+		beginUpdate();
+		updateSongs(songs, 0, songs.size());
+		return finishUpdate();
+	}
+
+	// the update can be split up over several calls to updateSongs, so large
+	// playlists do not trip the watchdog: beginUpdate, updateSongs.., finishUpdate
+	function beginUpdate() {
 		if ($.debug) {
-			System.println("IPlaylist::update() STARTING id:" + id() + " )");
+			System.println("IPlaylist::beginUpdate() id:" + id());
 		}
-		
+
 		// keep track of current songs
-		var songs_now = new [d_songs.size()];
-		for (var idx = 0; idx < songs_now.size(); ++idx) {
-			songs_now[idx] = d_songs[idx];
+		d_upd_now = new [d_songs.size()];
+		for (var idx = 0; idx < d_upd_now.size(); ++idx) {
+			d_upd_now[idx] = d_songs[idx];
 		}
 
-		// keep track of newly added songs
-		var songs_new = [];
+		d_upd_new = [];
+		d_upd_ord = [];
+		d_upd_time = 0;
+	}
 
-		// keep track of order of remote playlist
-		var songs_ord = [];
-		
-		// calculate time of the new playlist
-		var time = 0;
-		
+	// processes songs[start] up to (excluding) songs[end]
+	function updateSongs(songs, start, end) {
 		// find remote additions
-		for (var idx = 0; idx < songs.size(); ++idx) {
+		for (var idx = start; idx < end; ++idx) {
 			
 			var id = songs[idx].id();
 			if (id == null) {
@@ -366,22 +378,22 @@ class IPlaylist extends Playlist {
 			}
 
 			// add it to the new song ids (order preserved)
-			songs_ord.add(id);
+			d_upd_ord.add(id);
 			
 			// update information of the song
 			var isong = new ISong(id);
 			isong.updateMeta(songs[idx]);		// update and save song details
 			
 			// add to the time total
-			time += isong.time();
+			d_upd_time += isong.time();
 			
 			// add to tosync list if linked, but not downloaded
 			if (linked() && (isong.refId() == null)) {
-				songs_new.add(id);
+				d_upd_new.add(id);
 			}
 			
 			// if remove returns true, it was already on the old list, so nothing to do
-			if (songs_now.remove(id)) {
+			if (d_upd_now.remove(id)) {
 				continue;
 			}
 			
@@ -392,13 +404,15 @@ class IPlaylist extends Playlist {
 			if (linked()) {
 				isong.incRefCount();
 			}
-			
 		}
-		setTime(time);
+	}
+
+	function finishUpdate() {
+		setTime(d_upd_time);
 		
 		// find extra's on playlist
-		for (var idx = 0; idx < songs_now.size(); ++idx) {
-			var id = songs_now[idx];
+		for (var idx = 0; idx < d_upd_now.size(); ++idx) {
+			var id = d_upd_now[idx];
 			var isong = new ISong(id);
 			
 			// if linked, decrement reference count of the song
@@ -411,9 +425,14 @@ class IPlaylist extends Playlist {
 		}
 
 		// order of songs should be copied from server
-		d_songs = songs_ord;
+		d_songs = d_upd_ord;
 
 		save();
+
+		var songs_new = d_upd_new;
+		d_upd_now = null;
+		d_upd_new = null;
+		d_upd_ord = null;
 		return songs_new;
 	}
 	
