@@ -126,15 +126,25 @@ class SubMusicContentDelegate extends Media.ContentDelegate {
     }
 
 	function findAudioByRefId(refId) {
-		// trick: guess id and type from playable
+		// trick: guess id and type from playable, the event can be for the
+		// current, previous or next audio (e.g. after a skip)
 		var iplayable = new SubMusic.IPlayable();
-		var audio = iplayable.getAudio(iplayable.songidx());
-		if ((audio instanceof SubMusic.Audio)
-			&& (audio.refId() == refId)) {
-			if ($.debug) {
-				System.println("SubMusicContentDelegate::findAudioByRefId( refId: " + refId + " ) - guessed");
+		var songidx = iplayable.songidx();
+		if (songidx != null) {
+			var guesses = [songidx, songidx - 1, songidx + 1];
+			for (var idx = 0; idx != guesses.size(); ++idx) {
+				if (guesses[idx] < 0) {
+					continue;
+				}
+				var audio = iplayable.getAudio(guesses[idx]);
+				if ((audio instanceof SubMusic.Audio)
+					&& (audio.refId() == refId)) {
+					if ($.debug) {
+						System.println("SubMusicContentDelegate::findAudioByRefId( refId: " + refId + " ) - guessed");
+					}
+					return audio;
+				}
 			}
-			return audio;
 		}
 		// if trick not successful, do exhaustive search
 		if ($.debug) {
@@ -144,11 +154,10 @@ class SubMusicContentDelegate extends Media.ContentDelegate {
 		for (var typ = 0; typ != Audio.END; ++typ) {
 			if (ids[typ] == null) { continue; }
 			for (var idx = 0; idx != ids[typ].size(); ++idx) {
-				audio = new Audio(ids[typ][idx], typ);
-
-				// return if correct
-				if (audio.refId() == refId) {
-					return audio;
+				// compare the stored refId only, creating an Audio for every
+				// stored song trips the watchdog on large libraries
+				if (Audio.refIdOf(ids[typ][idx], typ) == refId) {
+					return new Audio(ids[typ][idx], typ);
 				}
 			}
 		}

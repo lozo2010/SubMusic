@@ -37,7 +37,7 @@ class AudioSync extends Deferrable {
 		for (var typ = 0; typ != Audio.END; ++typ) {
 			for (var idx = 0; idx != ids[typ].size(); ++idx) {
 				// only add to todo if not yet stored
-				if (refIdOf(ids[typ][idx], typ) == null) {
+				if (Audio.refIdOf(ids[typ][idx], typ) == null) {
 					d_todo.add([ids[typ][idx], typ]);
 				}
 			}
@@ -118,14 +118,5 @@ class AudioSync extends Deferrable {
 	function next() {
 		d_audio = null;
 		d_todo = d_todo.slice(1, null);
-	}
-
-	// refId of stored audio, without creating the full Audio object
-	static function refIdOf(id, typ) {
-		var storage = (typ == Audio.PODCAST_EPISODE) ? EpisodeStore.get(id) : SongStore.get(id);
-		if (storage == null) {
-			return null;
-		}
-		return storage["refId"];
 	}
 }

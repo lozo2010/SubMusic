@@ -92,15 +92,19 @@ class ISong extends Song {
 			storage = {"id" => id};		// nothing known yet except for id
 		}
 		Song.initialize(storage);
+	}
 
-		// load artwork if defined
-		if (art_id() != null) {
+	// artwork is loaded on first use, many ISong objects are created
+	// in loops that never need it
+	hidden function iartwork() {
+		if ((d_artwork == null) && (art_id() != null)) {
 			d_artwork = new IArtwork(art_id(), Artwork.SONG);
 		}
+		return d_artwork;
 	}
 
 	function artwork() {
-		if (d_artwork == null) {
+		if (iartwork() == null) {
 			return null;
 		}
 		return d_artwork.image();
@@ -186,6 +190,8 @@ class ISong extends Song {
 	}
 
 	function setArt_id(art_id) {
+		var art_id_old = d_storage["art_id"];
+
 		// if equal, nothing to do
 		var changed = updateAny("art_id", art_id);
 
@@ -199,8 +205,8 @@ class ISong extends Song {
 		}
 
 		// dereference previous art
-		if (d_artwork != null) {
-			d_artwork.decRefCount();
+		if (art_id_old != null) {
+			new IArtwork(art_id_old, Artwork.SONG).decRefCount();
 		}
 
 		// if new artwork, load it

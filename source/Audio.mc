@@ -12,6 +12,16 @@ class Audio extends Storable {
 		"type" => SONG,
 	};
 
+	// refId of stored audio, without creating the full object (song + artwork),
+	// use this when checking many ids, as creating all objects trips the watchdog
+	static function refIdOf(id, type) {
+		var storage = (type == PODCAST_EPISODE) ? EpisodeStore.get(id) : SongStore.get(id);
+		if (storage == null) {
+			return null;
+		}
+		return storage["refId"];
+	}
+
 	function initialize(id, type) {
 		//if ($.debug) {
 		//	System.println("Audio::initialize( id = " + id + " type = " + type + " )");
